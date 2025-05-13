@@ -1,210 +1,219 @@
-from flask import Flask, request, render_template_string, redirect, url_for
+from flask import Flask, request, render_template_string
+import openai
+import os
+import json
 
 app = Flask(__name__)
 
-HTML_TEMPLATE = """
+# Load API key from Render environment
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+HTML_HOME = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>QuizTornado</title>
+    <title>QuizTornado - AI Quiz Generator</title>
     <style>
         body {
-            background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
             font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(to right, #74ebd5, #acb6e5);
             text-align: center;
-            padding-top: 30px;
+            padding-top: 80px;
+            color: #333;
         }
         h1 {
-            color: #ffffff;
-            text-shadow: 2px 2px #333;
+            font-size: 42px;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        form {
+            background-color: white;
+            display: inline-block;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        input[type="text"], button {
+            font-size: 18px;
+            padding: 10px;
+            width: 80%;
+            margin: 10px 0;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h1>QuizTornado 🌪️</h1>
+    <form action="/quiz" method="POST">
+        <input type="text" name="topic" placeholder="Enter a topic (e.g., Space, Microbes)" required>
+        <br>
+        <button type="submit">Generate Quiz</button>
+    </form>
+</body>
+</html>
+"""
+
+HTML_QUIZ = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Quiz on {{ topic }}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #fceabb;
+            background-image: linear-gradient(315deg, #fceabb 0%, #f8b500 74%);
+            text-align: center;
+            padding: 50px;
+            color: #333;
         }
         form {
             background: white;
             padding: 30px;
             border-radius: 12px;
-            width: 80%;
-            margin: auto;
-            max-width: 600px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.3);
+            display: inline-block;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            text-align: left;
         }
-        input[type="text"] {
-            padding: 10px;
-            width: 80%;
-            font-size: 16px;
+        .question {
+            margin-bottom: 20px;
+        }
+        h2 {
+            text-align: center;
+            color: #2c3e50;
         }
         button {
-            margin-top: 20px;
-            padding: 10px 25px;
+            display: block;
+            margin: 20px auto 0;
+            padding: 10px 20px;
             font-size: 16px;
-            background-color: #28a745;
+            background: #e67e22;
             color: white;
             border: none;
             border-radius: 8px;
+            cursor: pointer;
         }
-        .question {
-            text-align: left;
-            margin-top: 20px;
+        button:hover {
+            background: #d35400;
         }
     </style>
 </head>
 <body>
-    <h1>🌀 QuizTornado</h1>
-
-    {% if not questions %}
-        <form method="POST">
-            <input type="text" name="topic" placeholder="Enter quiz topic (e.g. Cybersecurity)" required>
-            <br><br>
-            <button type="submit">Generate Quiz</button>
-        </form>
-    {% else %}
-        <form method="POST" action="/submit">
-            {% for q in questions %}
-                <div class="question">
-                    <p><b>Q{{ loop.index }}. {{ q['question'] }}</b></p>
-                    {% for opt in q['options'] %}
-                        <label><input type="radio" name="q{{ loop.index0 }}" value="{{ opt }}" required> {{ opt }}</label><br>
-                    {% endfor %}
-                </div>
-            {% endfor %}
-            <input type="hidden" name="topic" value="{{ topic }}">
-            <button type="submit">Submit Quiz</button>
-        </form>
-    {% endif %}
+    <h2>Quiz on {{ topic }}</h2>
+    <form action="/submit" method="POST">
+        {% for q in quiz %}
+            <div class="question">
+                <p><b>Q{{ loop.index }}. {{ q.question }}</b></p>
+                {% for opt in q.options %}
+                    <label>
+                        <input type="radio" name="q{{ loop.parent.index }}" value="{{ opt }}" required> {{ opt }}
+                    </label><br>
+                {% endfor %}
+                <input type="hidden" name="answer{{ loop.index }}" value="{{ q.answer }}">
+            </div>
+        {% endfor %}
+        <input type="hidden" name="topic" value="{{ topic }}">
+        <button type="submit">Submit Answers</button>
+    </form>
 </body>
 </html>
 """
 
-RESULT_TEMPLATE = """
+HTML_SCORE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>QuizTornado Result</title>
+    <title>Quiz Score</title>
     <style>
         body {
-            background-color: #e0f7fa;
             font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(to right, #43e97b, #38f9d7);
             text-align: center;
-            padding-top: 50px;
+            padding-top: 100px;
+            color: #2c3e50;
         }
-        .result-box {
+        .score-box {
             background: white;
-            padding: 30px;
-            margin: auto;
-            width: 60%;
-            max-width: 500px;
+            display: inline-block;
+            padding: 40px;
             border-radius: 12px;
-            box-shadow: 0 0 12px rgba(0,0,0,0.2);
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
         }
         h2 {
-            color: #333;
-        }
-        a {
-            text-decoration: none;
-            color: white;
-            background-color: #007BFF;
-            padding: 10px 20px;
-            border-radius: 8px;
-            display: inline-block;
-            margin-top: 20px;
+            font-size: 36px;
         }
     </style>
 </head>
 <body>
-    <div class="result-box">
+    <div class="score-box">
         <h2>Your Score: {{ score }} / {{ total }}</h2>
-        <p><b>Topic:</b> {{ topic }}</p>
-        <a href="/">Take Another Quiz</a>
+        <p>Topic: <strong>{{ topic }}</strong></p>
+        <a href="/">Try another quiz</a>
     </div>
 </body>
 </html>
 """
 
-# Dummy quiz generator with correct answers
 def generate_quiz(topic):
-    if topic.lower() == "cybersecurity":
-        return [
-            {
-                "question": "What is a common goal of cybersecurity?",
-                "options": ["Data protection", "File sharing", "Gaming", "Advertising"],
-                "answer": "Data protection"
-            },
-            {
-                "question": "Which of the following is a type of cyber attack?",
-                "options": ["Phishing", "Fishing", "Wishing", "Typing"],
-                "answer": "Phishing"
-            },
-            {
-                "question": "What does a firewall do?",
-                "options": ["Blocks unauthorized access", "Heats the CPU", "Cleans malware", "Stores files"],
-                "answer": "Blocks unauthorized access"
-            },
-            {
-                "question": "Which of these is a strong password?",
-                "options": ["123456", "password", "John2020", "D@t@_S3cUr3!"],
-                "answer": "D@t@_S3cUr3!"
-            },
-            {
-                "question": "Which of these is a cybersecurity best practice?",
-                "options": ["Using same password everywhere", "Clicking all email links", "Regular software updates", "Ignoring security warnings"],
-                "answer": "Regular software updates"
-            }
-        ]
-    else:
-        # fallback dummy questions for other topics
-        return [
-            {
-                "question": f"What is {topic} best known for?",
-                "options": [f"A concept in {topic}", f"A use of {topic}", f"A fact about {topic}", f"An application of {topic}"],
-                "answer": f"A use of {topic}"
-            },
-            {
-                "question": f"What can you learn from {topic}?",
-                "options": [f"Insight A", f"Insight B", f"Insight C", f"Insight D"],
-                "answer": f"Insight A"
-            },
-            {
-                "question": f"Who is related to {topic}?",
-                "options": [f"Person A", f"Person B", f"Person C", f"Person D"],
-                "answer": f"Person A"
-            },
-            {
-                "question": f"What is a fact about {topic}?",
-                "options": [f"Fact A", f"Fact B", f"Fact C", f"Fact D"],
-                "answer": f"Fact A"
-            },
-            {
-                "question": f"Which of the following relates to {topic}?",
-                "options": [f"{topic} A", f"{topic} B", f"{topic} C", f"{topic} D"],
-                "answer": f"{topic} A"
-            }
-        ]
+    prompt = f"""
+    Create a multiple-choice quiz with 5 questions about {topic}.
+    Each question should have 4 options and one correct answer.
+    Format the response as a JSON list like this:
+    [
+      {{
+        "question": "Question text",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "answer": "Correct option text"
+      }},
+      ...
+    ]
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+    content = response.choices[0].message.content.strip()
+    try:
+        return json.loads(content)
+    except Exception as e:
+        return []
 
-# Store questions in session or cache
-latest_questions = []
-latest_answers = []
-latest_topic = ""
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def home():
-    global latest_questions, latest_answers, latest_topic
-    if request.method == 'POST':
-        topic = request.form['topic']
-        quiz = generate_quiz(topic)
-        latest_questions = quiz
-        latest_answers = [q['answer'] for q in quiz]
-        latest_topic = topic
-        return render_template_string(HTML_TEMPLATE, questions=quiz, topic=topic)
-    return render_template_string(HTML_TEMPLATE, questions=None, topic="")
+    return render_template_string(HTML_HOME)
+
+@app.route('/quiz', methods=['POST'])
+def quiz():
+    topic = request.form['topic']
+    quiz = generate_quiz(topic)
+    if not quiz:
+        return "Failed to generate quiz. Try again."
+    return render_template_string(HTML_QUIZ, quiz=quiz, topic=topic)
 
 @app.route('/submit', methods=['POST'])
 def submit():
-    global latest_questions, latest_answers, latest_topic
+    topic = request.form['topic']
     score = 0
-    for i, correct_answer in enumerate(latest_answers):
+    total = 0
+    for i in range(1, 6):
         user_answer = request.form.get(f'q{i}')
-        if user_answer == correct_answer:
-            score += 1
-    return render_template_string(RESULT_TEMPLATE, score=score, total=len(latest_answers), topic=latest_topic)
+        correct_answer = request.form.get(f'answer{i}')
+        if user_answer and correct_answer:
+            total += 1
+            if user_answer.strip() == correct_answer.strip():
+                score += 1
+    return render_template_string(HTML_SCORE, score=score, total=total, topic=topic)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
