@@ -1,167 +1,96 @@
-from flask import Flask, request, render_template_string
-import openai
+from flask import Flask, render_template_string, request
 import os
 import json
+from openai import OpenAI
 
 app = Flask(__name__)
+client = OpenAI()
 
-# Load API key from Render environment
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-
-HTML_HOME = """
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>QuizTornado - AI Quiz Generator</title>
+    <title>QuizTornado</title>
     <style>
         body {
             font-family: 'Segoe UI', sans-serif;
-            background: linear-gradient(to right, #74ebd5, #acb6e5);
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
             text-align: center;
-            padding-top: 80px;
-            color: #333;
+            padding-top: 50px;
         }
-        h1 {
-            font-size: 42px;
-            margin-bottom: 20px;
-            color: #2c3e50;
-        }
-        form {
+        .container {
             background-color: white;
-            display: inline-block;
             padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.2);
-        }
-        input[type="text"], button {
-            font-size: 18px;
-            padding: 10px;
-            width: 80%;
-            margin: 10px 0;
-        }
-        button {
-            background-color: #3498db;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #2980b9;
-        }
-    </style>
-</head>
-<body>
-    <h1>QuizTornado 🌪️</h1>
-    <form action="/quiz" method="POST">
-        <input type="text" name="topic" placeholder="Enter a topic (e.g., Space, Microbes)" required>
-        <br>
-        <button type="submit">Generate Quiz</button>
-    </form>
-</body>
-</html>
-"""
-
-HTML_QUIZ = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Quiz on {{ topic }}</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            background-color: #fceabb;
-            background-image: linear-gradient(315deg, #fceabb 0%, #f8b500 74%);
-            text-align: center;
-            padding: 50px;
-            color: #333;
-        }
-        form {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            display: inline-block;
-            box-shadow: 0 0 10px rgba(0,0,0,0.2);
-            text-align: left;
-        }
-        .question {
-            margin-bottom: 20px;
-        }
-        h2 {
-            text-align: center;
-            color: #2c3e50;
-        }
-        button {
-            display: block;
-            margin: 20px auto 0;
-            padding: 10px 20px;
-            font-size: 16px;
-            background: #e67e22;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #d35400;
-        }
-    </style>
-</head>
-<body>
-    <h2>Quiz on {{ topic }}</h2>
-    <form action="/submit" method="POST">
-        {% for q in quiz %}
-            <div class="question">
-                <p><b>Q{{ loop.index }}. {{ q.question }}</b></p>
-                {% for opt in q.options %}
-                    <label>
-                        <input type="radio" name="q{{ loop.parent.index }}" value="{{ opt }}" required> {{ opt }}
-                    </label><br>
-                {% endfor %}
-                <input type="hidden" name="answer{{ loop.index }}" value="{{ q.answer }}">
-            </div>
-        {% endfor %}
-        <input type="hidden" name="topic" value="{{ topic }}">
-        <button type="submit">Submit Answers</button>
-    </form>
-</body>
-</html>
-"""
-
-HTML_SCORE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Quiz Score</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            background: linear-gradient(to right, #43e97b, #38f9d7);
-            text-align: center;
-            padding-top: 100px;
-            color: #2c3e50;
-        }
-        .score-box {
-            background: white;
-            display: inline-block;
-            padding: 40px;
-            border-radius: 12px;
+            margin: auto;
+            width: 70%;
+            border-radius: 15px;
             box-shadow: 0 0 20px rgba(0,0,0,0.2);
         }
-        h2 {
-            font-size: 36px;
+        h1 {
+            color: #d63384;
+        }
+        input[type="text"] {
+            width: 60%;
+            padding: 10px;
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #6610f2;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        .question {
+            margin: 20px 0;
+            text-align: left;
+        }
+        .score {
+            font-size: 20px;
+            margin-top: 20px;
+            color: green;
         }
     </style>
 </head>
 <body>
-    <div class="score-box">
-        <h2>Your Score: {{ score }} / {{ total }}</h2>
-        <p>Topic: <strong>{{ topic }}</strong></p>
-        <a href="/">Try another quiz</a>
+    <div class="container">
+        <h1>QuizTornado 🌪️</h1>
+        <form method="POST" action="/quiz">
+            <input type="text" name="topic" placeholder="Enter a topic (e.g., Microbes)" required>
+            <button type="submit">Generate Quiz</button>
+        </form>
+        {% if quiz %}
+        <form method="POST" action="/score">
+            {% for i, q in enumerate(quiz) %}
+                <div class="question">
+                    <p><b>Q{{ i+1 }}. {{ q.question }}</b></p>
+                    {% for option in q.options %}
+                        <label>
+                            <input type="radio" name="q{{ i }}" value="{{ option }}" required> {{ option }}
+                        </label><br>
+                    {% endfor %}
+                    <input type="hidden" name="a{{ i }}" value="{{ q.answer }}">
+                </div>
+            {% endfor %}
+            <button type="submit">Submit Answers</button>
+        </form>
+        {% endif %}
+
+        {% if score is not none %}
+        <div class="score">
+            <p>Your Score: {{ score }}/{{ total }}</p>
+        </div>
+        {% endif %}
     </div>
 </body>
 </html>
 """
+
+@app.route('/', methods=['GET'])
+def home():
+    return render_template_string(HTML_TEMPLATE)
 
 def generate_quiz(topic):
     prompt = f"""
@@ -177,7 +106,7 @@ def generate_quiz(topic):
       ...
     ]
     """
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7
@@ -186,34 +115,26 @@ def generate_quiz(topic):
     try:
         return json.loads(content)
     except Exception as e:
+        print("Error parsing quiz:", e)
         return []
-
-@app.route('/')
-def home():
-    return render_template_string(HTML_HOME)
 
 @app.route('/quiz', methods=['POST'])
 def quiz():
     topic = request.form['topic']
     quiz = generate_quiz(topic)
-    if not quiz:
-        return "Failed to generate quiz. Try again."
-    return render_template_string(HTML_QUIZ, quiz=quiz, topic=topic)
+    return render_template_string(HTML_TEMPLATE, quiz=quiz)
 
-@app.route('/submit', methods=['POST'])
-def submit():
-    topic = request.form['topic']
-    score = 0
+@app.route('/score', methods=['POST'])
+def score():
     total = 0
-    for i in range(1, 6):
-        user_answer = request.form.get(f'q{i}')
-        correct_answer = request.form.get(f'answer{i}')
-        if user_answer and correct_answer:
-            total += 1
-            if user_answer.strip() == correct_answer.strip():
-                score += 1
-    return render_template_string(HTML_SCORE, score=score, total=total, topic=topic)
+    correct = 0
+    for i in range(5):
+        selected = request.form.get(f'q{i}')
+        answer = request.form.get(f'a{i}')
+        if selected == answer:
+            correct += 1
+        total += 1
+    return render_template_string(HTML_TEMPLATE, score=correct, total=total)
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True)
